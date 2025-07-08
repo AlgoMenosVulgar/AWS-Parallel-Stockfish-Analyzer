@@ -23,14 +23,10 @@ engine and export centipawn scores to a tidy CSV file.
 ## Installation
 
 ```bash
-# 1. Clone / download the sources
+Clone / download the sources
 cd your-project-folder
 
-# 2. Set up a virtual environment (recommended)
-python -m venv .venv
-source .venv/bin/activate      # Windows: .venv\Scripts\activate
-
-# 3. Install the single Python dependency
+Install the single Python dependency
 pip install -r requirement.txt
 ```
 
