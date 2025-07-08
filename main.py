@@ -1,121 +1,55 @@
-#!/usr/bin/env python3
-# Parallel PGN analysis with Stockfish — fully descriptive identifiers
+import pgn_utils as pu
 
-import argparse, multiprocessing as mp, pathlib, sys, time
+import output  
+from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import os, time
 
-from pgn_utils import (
-    build_payloads,
-    run_parallel_analysis,
-)
+# -- config lives ONLY here ---------------------------------------------------
+ROOT            = Path(__file__).resolve().parent
+PGN_PATH        = ROOT / "pgn"     / "lichess_tournament_2021.04.10_spring21_2021-spring-marathon.pgn"
+CSV_PATH        = ROOT / "results" / "scores.csv"
+STOCKFISH_PATH  = ROOT / "engine"  / "stockfish-windows-x86-64-avx2.exe"
 
-from output import (
-    results_to_dataframe,
-    save_dataframe
-)
+DEPTH           = 12
+HASH_MB         = 32
+HEADERS_TO_KEEP = ["Date", "White", "Black", "WhiteElo", "BlackElo", "ECO"]
+PROGRESS_EVERY  = 10
 
-# ───────────────────────────────────────────────────────────────────────────────
-# 1. PATHS
-# ───────────────────────────────────────────────────────────────────────────────
-PROJECT_ROOT_DIRECTORY = pathlib.Path(__file__).resolve().parent
-DEFAULT_PGN_FILE_PATH = PROJECT_ROOT_DIRECTORY / "pgn" / "short.pgn"
-DEFAULT_STOCKFISH_ENGINE_PATH = (PROJECT_ROOT_DIRECTORY / "engine" / "stockfish-windows-x86-64-bmi2.exe")
+MAX_GAMES       = 50
+MIN_WHITE_MOVES = 15
+# ----------------------------------------------------------------------------
 
-#pip install stockfish
-#coge el .exe y muevelo a nose que
-#llamalo
+def main(): 
+    t0 = time.time()
 
-DEFAULT_OUTPUT_FILE_PATH = (PROJECT_ROOT_DIRECTORY / "results" / "analysis_results.xlsx")
-
-# ───────────────────────────────────────────────────────────────────────────────
-# 2. DEFINITIONS (command-line interface)
-# ───────────────────────────────────────────────────────────────────────────────
-def create_argument_parser() -> argparse.ArgumentParser:
-    argument_parser = argparse.ArgumentParser(
-        description="Analyse PGN games in parallel using Stockfish",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    argument_parser.add_argument("--pgn", dest="pgn_file_path")
-    argument_parser.add_argument("--stockfish", dest="stockfish_engine_path")
-    argument_parser.add_argument("--depth", type=int, default=18)
-    argument_parser.add_argument("--hash", type=int, default=500)
-    argument_parser.add_argument("--workers", type=int, default=mp.cpu_count())
-    argument_parser.add_argument("--out", dest="output_file_path")
-    return argument_parser
-
-# ───────────────────────────────────────────────────────────────────────────────
-# 3. VARIABLE RESOLUTION (hash, depth, etc.)
-# ───────────────────────────────────────────────────────────────────────────────
-def resolve_runtime_variables(parsed_args: argparse.Namespace) -> dict[str, pathlib.Path | int]:
-    resolved_variables = {
-        "pgn_file_path": pathlib.Path(
-            parsed_args.pgn_file_path or DEFAULT_PGN_FILE_PATH
-        ).resolve(),
-        "stockfish_engine_path": pathlib.Path(
-            parsed_args.stockfish_engine_path or DEFAULT_STOCKFISH_ENGINE_PATH
-        ).resolve(),
-        "search_depth": parsed_args.depth,
-        "hash_size_mb": parsed_args.hash,
-        "worker_process_count": parsed_args.workers,
-        "output_file_path": PROJECT_ROOT_DIRECTORY
-        / pathlib.Path(parsed_args.output_file_path or DEFAULT_OUTPUT_FILE_PATH.name),
-    }
-    resolved_variables["output_file_path"].parent.mkdir(parents=True, exist_ok=True)
-    return resolved_variables
-
-# ───────────────────────────────────────────────────────────────────────────────
-# 4. MAIN EXECUTION FUNCTION
-# ───────────────────────────────────────────────────────────────────────────────
-def main() -> None:
-    mp.set_start_method("spawn", force=True)
-    runtime_arguments = create_argument_parser().parse_args()
-    config = resolve_runtime_variables(runtime_arguments)
-
-    if not config["pgn_file_path"].is_file():
-        sys.exit(f"PGN file not found: {config['pgn_file_path']}")
-    if not config["stockfish_engine_path"].is_file():
-        sys.exit(f"Stockfish executable not found: {config['stockfish_engine_path']}")
-
-    # ───────────────────────────────────────────────────────────────────────────
-    # 5. DISPLAY CONFIGURATION
-    # ───────────────────────────────────────────────────────────────────────────
-    print(
-        f"""
-        PGN file           : {config['pgn_file_path']}
-        Stockfish engine   : {config['stockfish_engine_path']}
-        Output file        : {config['output_file_path']}
-        Search depth       : {config['search_depth']}
-        Hash size (MB)     : {config['hash_size_mb']}
-        Worker processes   : {config['worker_process_count']}
-        """
+    games = pu.parse_pgn(
+        PGN_PATH, HEADERS_TO_KEEP,
+        MAX_GAMES, MIN_WHITE_MOVES
     )
 
-    overall_start_time = time.time()
-    
-    game_payloads = build_payloads(config["pgn_file_path"])
-    if not game_payloads:
-        sys.exit("No games found in PGN file.")
+    workers = max(1, round((os.cpu_count() or 2) / 2) - 1)
+    chunks = pu.chunked(games, workers)
 
-    print("[Debug Enzo] Build Paylods ends here")
-    
-    analysis_results = run_parallel_analysis(
-        payloads=game_payloads,
-        stockfish_path=config["stockfish_engine_path"],
-        depth=config["search_depth"],
-        hash_mb=config["hash_size_mb"],
-        workers=config["worker_process_count"],
-    )
+    all_results = []
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        future_map = {
+            pool.submit(
+                pu.analyse_chunk, chunk, wid+1,
+                STOCKFISH_PATH, DEPTH, HASH_MB, PROGRESS_EVERY
+            ): wid+1
+            for wid, chunk in enumerate(chunks)
+        }
+        for fut in as_completed(future_map):
+            wid = future_map[fut]
+            all_results.extend(fut.result())
+            print(f"✓ Chunk {wid}/{len(chunks)} done", flush=True)
 
-    analysis_dataframe = results_to_dataframe(analysis_results)
-    if analysis_dataframe.empty:
-        print("Empty DataFrame — nothing saved.")
-    else:
-        save_dataframe(analysis_dataframe, config["output_file_path"].as_posix())
-        print(f"Saved {len(analysis_dataframe)} analysed games → {config['output_file_path']}")
+    all_results.sort(key=lambda x: x[0])
+    output.write_results(CSV_PATH, HEADERS_TO_KEEP, all_results)
 
-    print(f"Elapsed time: {(time.time() - overall_start_time) / 60:.2f} minutes")
-    
-    print(f"Games per second: {len(analysis_dataframe) / (time.time() - overall_start_time):.2f}")
+    elapsed = time.time() - t0
+    print(f"✅ Finished in {elapsed:.2f}s — {len(all_results)} games")
 
-# ───────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     main()

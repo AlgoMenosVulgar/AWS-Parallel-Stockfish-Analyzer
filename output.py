@@ -1,30 +1,25 @@
-import os
-import pandas as pd
-from typing import List, Dict, Any
+#!/usr/bin/env python3
+
+import csv, json
+from pathlib import Path
+from typing import Sequence
 
 
-def results_to_dataframe(results: List[Dict[str, Any]]) -> pd.DataFrame:
-    """
-    Converts a list of result dictionaries into a pandas DataFrame.
-    """
-    return pd.DataFrame(results)
+def write_results(csv_path, headers_to_keep, all_results):
 
-def save_dataframe(df: pd.DataFrame, output_path: str) -> None:
-    """
-    Saves the DataFrame to CSV or Excel, appending to an existing file if present.
-    """
-    ext = os.path.splitext(output_path)[1].lower()
-    if ext == '.csv':
-        if os.path.exists(output_path):
-            df.to_csv(output_path, mode='a', header=False, index=False)
-        else:
-            df.to_csv(output_path, index=False)
-    elif ext in ('.xls', '.xlsx'):
-        if os.path.exists(output_path):
-            existing = pd.read_excel(output_path)
-            combined = pd.concat([existing, df], ignore_index=True)
-            combined.to_excel(output_path, index=False)
-        else:
-            df.to_excel(output_path, index=False)
-    else:
-        raise ValueError(f"Unsupported file extension for saving: {ext}")
+
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with csv_path.open("w", newline="", encoding="utf-8") as csvf:
+
+        w = csv.writer(csvf) 
+        w.writerow(["GameIndex", *headers_to_keep, "Scores"])
+
+        for idx, headers, scores in all_results:
+            w.writerow(
+                [idx]
+                + [headers.get(h, "") for h in headers_to_keep]
+                + [json.dumps(scores)]
+            )
+  
+  
