@@ -22,13 +22,14 @@ engine and export centipawn scores to a tidy CSV file.
 
 ## Installation
 
-```bash
-Clone / download the sources
-cd your-project-folder
-
-Install the single Python dependency
-pip install -r requirement.txt
-```
+1. Install the analyzer via pip:
+   ```bash
+   pip install aws-parallel-stockfish-analyzer
+   ```
+2. Install the Python dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
 **Tip:**  Feel free to pin `python-chess` to an exact version once your
 workflow is stable.
@@ -49,9 +50,16 @@ The script will:
 
 * Parse each game, discarding those with fewer than the configured white
   moves.
-* Spawn roughly **(CPU‑cores/2 − 1)** worker processes and split the games
-  evenly between them.
-* Query Stockfish at a fixed depth for **every single ply** (white & black)
+- Determine the number of workers as  
+  ```python
+  workers = max(1, round((os.cpu_count() or 2) / 2) - 1)
+  ```  
+  This takes half of the logical CPU count (to approximate physical cores on Windows, where `os.cpu_count()` includes hyperthreads), subtracts one core to reserve for disk I/O and OS overhead, and ensures at least one worker.  
+- Split the games evenly across those `num_workers` processes.
+
+
+  
+* Query Stockfish at a fixed depth for every single ply (white & black)
   in every kept game.
 * Dump a **scores.csv** to the **results/** folder containing:
 
